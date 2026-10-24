@@ -1,0 +1,14 @@
+name = "sparclothing"
+pages_build_output_dir = "public"
+compatibility_date = "2026-09-01"
+
+# Garment gallery (see GALLERY.md)
+[[d1_databases]]
+binding = "DB"
+database_name = "spar-gallery"
+database_id = "70ceb927-c153-49b2-bd45-39e35d74cbf3"
+
+[[r2_buckets]]
+binding = "PHOTOS"
+bucket_name = "spar-gallery-photos"
+jurisdiction = "eu"

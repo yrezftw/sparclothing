@@ -1,0 +1,66 @@
+[
+  {
+    "id": "tee-ink",
+    "name": "Archive Tee",
+    "color": "Ink black",
+    "price": 449,
+    "shape": "tee",
+    "fill": "#1d211f",
+    "desc": "Heavy 220 g organic cotton. Code on the chest.",
+    "sizes": [
+      "XS",
+      "S",
+      "M",
+      "L",
+      "XL"
+    ],
+    "badge": "Bestseller"
+  },
+  {
+    "id": "tee-bone",
+    "name": "Archive Tee",
+    "color": "Bone",
+    "price": 449,
+    "shape": "tee",
+    "fill": "#e6e1d6",
+    "desc": "Same tee, light colourway. Code on the chest.",
+    "sizes": [
+      "XS",
+      "S",
+      "M",
+      "L",
+      "XL"
+    ]
+  },
+  {
+    "id": "hood-sage",
+    "name": "Memory Hoodie",
+    "color": "Sage",
+    "price": 899,
+    "shape": "hood",
+    "fill": "#8a9a86",
+    "desc": "Brushed fleece, 420 g. Large code on the back.",
+    "sizes": [
+      "S",
+      "M",
+      "L",
+      "XL"
+    ],
+    "badge": "New"
+  },
+  {
+    "id": "crew-navy",
+    "name": "Roll Crewneck",
+    "color": "Deep navy",
+    "price": 749,
+    "shape": "crew",
+    "fill": "#24304f",
+    "desc": "Loopback cotton. Code on the left sleeve.",
+    "sizes": [
+      "S",
+      "M",
+      "L",
+      "XL"
+    ]
+  }
+]
