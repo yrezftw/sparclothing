@@ -1,9 +1,11 @@
 // The sparclothing.se Worker. The shop pages and the gallery app are plain files
 // in public/ (the ASSETS binding). This script runs first for every request: it
-// forwards the shop's other addresses, runs the Stripe checkout and the garment
-// gallery's server, and opens the gallery app at /g/{ID}.
+// forwards the shop's other addresses, shows "Opening soon" until the site opens
+// (src/preview.js), runs the Stripe checkout and the garment gallery's server,
+// and opens the gallery app at /g/{ID}.
 import { handleCheckout } from "./checkout.js";
 import { handleGalleryApi } from "./gallery-api.js";
+import { previewGate } from "./preview.js";
 
 // The other addresses forward to sparclothing.se with the same path, so owner
 // cookies and search engines only ever see one address. Each name also has to be
@@ -17,7 +19,7 @@ const FORWARD = new Set([
 ]);
 
 export default {
-  fetch(request, env) {
+  async fetch(request, env) {
     const url = new URL(request.url);
     if (FORWARD.has(url.hostname)) {
       url.protocol = "https:";
@@ -25,6 +27,8 @@ export default {
       url.port = "";
       return Response.redirect(url.href, 301);
     }
+    const closed = await previewGate(request, env, url);
+    if (closed) return closed;
 
     const path = url.pathname;
     if (path === "/api/checkout") {

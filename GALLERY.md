@@ -34,7 +34,7 @@ Your codes already point at their final address, `https://sparclothing.se/g/{ID}
 7. **Website:** **Workers & Pages → Create application**, choose **GitHub**, pick `sparclothing`, keep the name `sparclothing` and the default commands, and press **Deploy**. Then in the new Worker, under **Settings**:
    - **Variables and Secrets → Add**: type **Secret**, name `ADMIN_TOKEN`, value a long password only you know, then **Deploy**. Never paste it in chat.
    - **Domains & Routes → Add → Custom Domain**: add `sparclothing.se`, then the same way `www.sparclothing.se`, `spårclothing.se` and `www.spårclothing.se`. The last three forward to sparclothing.se by themselves. A domain can only be added once its nameserver switch has gone through. If Cloudflare says a DNS record for one of the names already exists, delete that record under the domain's **DNS → Records** and try again.
-8. **Load your codes:** open **sparclothing.se/g/admin**, enter the admin password, pick the register CSV file(s) from the QR generator and press **Load register**. Do this after every new batch of codes; loading the same file twice is safe.
+8. **Load your codes:** open **sparclothing.se/g/admin**. Until the shop opens, the site shows "Opening soon" to everyone: type your admin password there first (once per browser). Then enter the admin password again, pick the register CSV file(s) from the QR generator and press **Load register**. Do this after every new batch of codes; loading the same file twice is safe.
 9. **Test:** scan one of your codes (on screen or printed), claim it with its label code and add a photo. Then print.
 
 Until Stripe is set up, the shop page is visible but its checkout says it isn't open yet.

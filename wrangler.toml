@@ -2,6 +2,11 @@ name = "sparclothing"
 main = "src/index.js"
 compatibility_date = "2026-09-01"
 
+# "yes" opens the site to everyone. Until then every page shows "Opening soon",
+# except in browsers where the admin password was typed in (src/preview.js).
+[vars]
+SITE_OPEN = "no"
+
 # Shop pages and the gallery app. The Worker runs first for every request so it
 # can forward www. and spårclothing.se, then hands the rest to these files.
 [assets]
