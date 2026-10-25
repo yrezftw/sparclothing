@@ -30,11 +30,10 @@ Your codes already point at their final address, `https://sparclothing.se/g/{ID}
 3. **Cloudflare account:** make a free account at dash.cloudflare.com. Choose **Add a domain**, type `sparclothing.se` and pick the **Free** plan. Cloudflare then shows you two nameservers. In Loopia's Customer Zone, click the domain and first switch off **DNSSEC** if it's on (Loopia switches it on for .se domains, and if it stays on after the move, the site won't open for many visitors). Then press **Name servers** and enter the two from Cloudflare. Do the same for `spårclothing.se`; if Cloudflare won't take the å, type `xn--sprclothing-y8a.se`, which is the same name. The switch can take a few hours.
 4. **Database:** in Cloudflare go to **Storage & Databases → D1 → Create**. Name it `spar-gallery`, location *Western Europe*. Copy the **Database ID** and send it to Claude (it isn't a secret).
 5. **Photo storage:** **R2 → Overview** → add a payment card if asked (the free tier still needs one) → **Create bucket**. Name it `spar-gallery-photos`, and under *Location* pick **Specify jurisdiction → European Union**.
-6. Claude puts the shop and the gallery in your GitHub repository. Wait for Claude's message.
-7. **Website:** **Workers & Pages → Create → Pages → Connect to Git**, pick `sparclothing`, press **Save and Deploy**. Then in the new project:
-   - **Settings → Variables and Secrets → Add**: type **Secret**, name `ADMIN_TOKEN`, value a long password only you know. Never paste it in chat.
-   - **Custom domains → Set up a domain**: add `sparclothing.se`, then the same way `www.sparclothing.se`, `spårclothing.se` and `www.spårclothing.se`. The last three forward to sparclothing.se by themselves. If Cloudflare says a DNS record for one of the names already exists, delete that record under the domain's **DNS → Records** and try again.
-   - **Deployments**: press **Retry deployment** on the latest one, so it picks up the password.
+6. Done: Claude put the shop and the gallery in your GitHub repository on 24 October 2026.
+7. **Website:** **Workers & Pages → Create application**, choose **GitHub**, pick `sparclothing`, keep the name `sparclothing` and the default commands, and press **Deploy**. Then in the new Worker, under **Settings**:
+   - **Variables and Secrets → Add**: type **Secret**, name `ADMIN_TOKEN`, value a long password only you know, then **Deploy**. Never paste it in chat.
+   - **Domains & Routes → Add → Custom Domain**: add `sparclothing.se`, then the same way `www.sparclothing.se`, `spårclothing.se` and `www.spårclothing.se`. The last three forward to sparclothing.se by themselves. A domain can only be added once its nameserver switch has gone through. If Cloudflare says a DNS record for one of the names already exists, delete that record under the domain's **DNS → Records** and try again.
 8. **Load your codes:** open **sparclothing.se/g/admin**, enter the admin password, pick the register CSV file(s) from the QR generator and press **Load register**. Do this after every new batch of codes; loading the same file twice is safe.
 9. **Test:** scan one of your codes (on screen or printed), claim it with its label code and add a photo. Then print.
 
@@ -42,9 +41,8 @@ Until Stripe is set up, the shop page is visible but its checkout says it isn't 
 
 ## Files
 - `public/g/` the app (page, script, styles, icons, offline support). QR readers: `zxing-reader.js` + `zxing_reader.wasm` (zxing-cpp, fast, loaded only when finding photos) with `jsqr.min.js` as backup; licences in `THIRD-PARTY-LICENSES.txt`
-- `functions/g/[[path]].js` makes every /g/{ID} address open the app
-- `functions/_middleware.js` forwards www.sparclothing.se, spårclothing.se and www.spårclothing.se to sparclothing.se
-- `functions/api/g/[[path]].js` + `lib/gallery-api.js` the server: claim, photos, approval, admin import
-- `test/` browser tests (`e2e.js`, `e2e-find.js`) and `make-test-photos.js` for fake photos with codes in them
-- `wrangler.toml` for trying the gallery on its own (`npx wrangler pages dev public --binding ADMIN_TOKEN=test`)
-- `STORE-CHANGES.md` how it slots into the shop site; `tools/assemble-site.py` builds the combined shop + gallery folder for the repository (`python3 tools/assemble-site.py <new folder> --d1-id <Database ID>`)
+- `src/index.js` opens the app at every /g/{ID} address, sends /api/g/ to the server, and forwards www.sparclothing.se, spårclothing.se and www.spårclothing.se to sparclothing.se
+- `src/gallery-api.js` the server: claim, photos, approval, admin import
+- `wrangler.toml` the photo database (D1) and photo storage (R2)
+
+The browser tests and photo-test tools are kept in the project's gallery folder. To try the site locally: `npx wrangler dev --var ADMIN_TOKEN:test`, then open http://localhost:8787/g/admin.

@@ -13,11 +13,11 @@ Buy **sparclothing.se** (and spårclothing.se if you want it) from a Swedish reg
 2. Connect GitHub to Claude: https://claude.ai/connect-github
 3. Tell Claude in the project thread. Claude pushes this folder to the repository.
 
-## 4. Host it on Cloudflare Pages (free)
+## 4. Host it on Cloudflare (free)
 1. Create a free account at [dash.cloudflare.com](https://dash.cloudflare.com).
-2. Go to **Workers & Pages → Create → Pages → Connect to Git**, pick the `sparclothing` repository and press **Save and Deploy**. No build command is needed; the settings are in `wrangler.toml`.
-3. Under **Settings → Variables and Secrets**, add `STRIPE_SECRET_KEY` as a **Secret** (see step 5).
-4. Under **Custom domains**, add `sparclothing.se` and follow the instructions to point the domain at Cloudflare.
+2. Go to **Workers & Pages → Create application**, choose **GitHub**, pick the `sparclothing` repository and press **Deploy**. Keep the name `sparclothing` and the default commands; the settings are in `wrangler.toml`.
+3. In the new Worker, under **Settings → Variables and Secrets**, add `STRIPE_SECRET_KEY` as a **Secret** (see step 5).
+4. Under **Settings → Domains & Routes → Add → Custom Domain**, add `sparclothing.se` and the other names listed in GALLERY.md step 7. The domain has to be on Cloudflare first (GALLERY.md step 3).
 
 Every later change Claude pushes to GitHub goes live automatically.
 
@@ -36,16 +36,18 @@ Before launch, replace these:
 - Product photos, when you have them.
 
 ## 7. Switch on the garment gallery
-Once the shop is live, follow the gallery guide ([gallery/SETUP.md](/mnt/project-files/gallery/SETUP.md)) to create the photo database and photo storage in Cloudflare and set an admin password. Photo storage (R2) asks for a payment card even on the free plan. Then send Claude the D1 **Database ID** (it isn't a secret), and Claude adds the gallery to the site at sparclothing.se/g/.
+The gallery is already part of this site at sparclothing.se/g/, using the photo database (D1) and photo storage (R2) from GALLERY.md steps 4 and 5. The steps, including the admin password, are in GALLERY.md ("Go live").
 
 ## Good to know
 - **VAT to other EU countries:** Swedish 25% VAT applies until your sales to other EU countries pass €10,000 a year. After that you register for OSS with Skatteverket and charge each country's VAT. Stripe Tax can do this automatically.
-- **Shipping** in checkout: Sweden 59 kr (free from 800 kr), rest of the EU 99 kr. Norway is left out because it's outside the EU and needs separate VAT registration. Change the rules in `functions/api/checkout.js`.
+- **Shipping** in checkout: Sweden 59 kr (free from 800 kr), rest of the EU 99 kr. Norway is left out because it's outside the EU and needs separate VAT registration. Change the rules in `src/checkout.js`.
 - **Stock:** there's no stock tracking yet. If something sells out, remove the size from `products.json`.
 
 ## Files
-- `public/` the website (shop, confirmation, terms, privacy)
-- `functions/api/checkout.js` creates the Stripe checkout with server-side prices
-- `wrangler.toml` Cloudflare Pages settings
+- `public/` the website (shop, confirmation, terms, privacy) and the gallery app (`public/g/`)
+- `src/index.js` the Worker: forwards the other addresses and routes the checkout and the gallery
+- `src/checkout.js` creates the Stripe checkout with server-side prices
+- `src/gallery-api.js` the gallery's server (see GALLERY.md)
+- `wrangler.toml` Cloudflare settings: files, database and photo storage
 
-To run it locally: `npx wrangler pages dev public --binding STRIPE_SECRET_KEY=sk_test_…`
+To run it locally: `npx wrangler dev --var STRIPE_SECRET_KEY:sk_test_…`

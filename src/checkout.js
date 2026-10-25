@@ -1,7 +1,7 @@
 // POST /api/checkout  { items: [{ id, size, qty }] }  ->  { url }
 // Creates a Stripe Checkout Session. Prices come from products.json on the
 // server, never from the browser, so a customer can't edit what they pay.
-import PRODUCTS from "../../public/products.json";
+import PRODUCTS from "../public/products.json";
 
 const FREE_SHIPPING_FROM = 800; // kr, Sweden
 const MAX_QTY = 10;
@@ -62,7 +62,7 @@ export function buildSessionParams(items, origin) {
   return p;
 }
 
-export async function onRequestPost({ request, env }) {
+export async function handleCheckout(request, env) {
   if (!env.STRIPE_SECRET_KEY) return json({ error: "Checkout isn't set up yet" }, 503);
   let body;
   try { body = await request.json(); } catch { return json({ error: "Bad request" }, 400); }
