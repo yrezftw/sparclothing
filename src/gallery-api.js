@@ -321,8 +321,9 @@ async function getPhotoFile(env, request, id, pid, size) {
 async function requireAdmin(env, request) {
   if (!env.ADMIN_TOKEN) fail(503, "ADMIN_TOKEN isn't set in Cloudflare yet");
   const given = (request.headers.get("authorization") || "").replace(/^Bearer\s+/i, "");
-  // compare hashes so the check takes the same time whatever was typed
-  if ((await sha256(given)) !== (await sha256(env.ADMIN_TOKEN))) fail(401, "Wrong admin password");
+  // compare hashes so the check takes the same time whatever was typed; spaces at
+  // either end are ignored, since a pasted password often brings one along
+  if ((await sha256(given.trim())) !== (await sha256(env.ADMIN_TOKEN.trim()))) fail(401, "Wrong admin password");
 }
 
 async function adminImport(env, request) {

@@ -39,7 +39,7 @@ Before launch, replace these:
 The gallery is already part of this site at sparclothing.se/g/, using the photo database (D1) and photo storage (R2) from GALLERY.md steps 4 and 5. The steps, including the admin password, are in GALLERY.md ("Go live").
 
 ## Good to know
-- **Opening soon:** until launch, every page shows "Opening soon". Type your admin password (`ADMIN_TOKEN`) on that page to see the real site in that browser. To open the shop to everyone, `SITE_OPEN` in the settings file changes to `"yes"` (ask Claude).
+- **Opening soon:** until launch, every page shows just "Opening soon". To see the real site, open **sparclothing.se/preview** and type your admin password (`ADMIN_TOKEN`); that browser remembers it. To open the shop to everyone, `SITE_OPEN` in the settings file changes to `"yes"` (ask Claude).
 - **VAT to other EU countries:** Swedish 25% VAT applies until your sales to other EU countries pass €10,000 a year. After that you register for OSS with Skatteverket and charge each country's VAT. Stripe Tax can do this automatically.
 - **Shipping** in checkout: Sweden 59 kr (free from 800 kr), rest of the EU 99 kr. Norway is left out because it's outside the EU and needs separate VAT registration. Change the rules in `src/checkout.js`.
 - **Stock:** there's no stock tracking yet. If something sells out, remove the size from `products.json`.
