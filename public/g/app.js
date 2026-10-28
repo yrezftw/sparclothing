@@ -504,8 +504,9 @@ function onSolidBackground(px) {
   });
 }
 
-// Returns the garment IDs whose QR codes can be read in this photo.
-async function garmentIdsInPhoto(file) {
+// Returns the garment IDs whose QR codes can be read in this photo. Codes the reader found
+// but couldn't read go in seen.misses, as corner points in the upright photo.
+async function garmentIdsInPhoto(file, seen = {}) {
   const zx = await loadZXing().catch(() => null);
   if (!zx) return slowGarmentIds(file);
   // Near-misses are codes the reader found but couldn't read, as their corner points.
@@ -536,6 +537,7 @@ async function garmentIdsInPhoto(file) {
         misses.push(...r.misses.map(pts => pts.map(({ x, y }) => ({ x: x / shrink, y: y / shrink }))));
       }
     }
+    seen.misses = misses;
     return await readNearMisses(zx, bmp, misses);
   } finally { bmp.close?.(); }
 }
@@ -660,8 +662,9 @@ async function slowGarmentIds(file) {
 
 // When none of your codes can be read in a photo, a second look (far-finder.js, in the
 // background) checks for your garments only. It knows what each of your codes looks like,
-// so it can recognise one about half the size the normal reader needs. That is less
-// certain than reading the code, so you pick which of these photos to add.
+// so it can recognise one about half the size the normal reader needs, or one the reader
+// found but couldn't read (blurry, or seen in a mirror). That is less certain than reading
+// the code, so you pick which of these photos to add.
 let farWorker = null, farStop = null;
 function stopFarFinder() {
   farWorker?.terminate();
@@ -670,25 +673,27 @@ function stopFarFinder() {
   farStop = null;
 }
 
-// The photo as grey levels, one byte per pixel.
+// The photo as grey levels, one byte per pixel (scale: its size over the photo's, below 1 for huge photos).
 async function grayOf(file) {
   const bmp = await toBitmap(file);
-  let px;
-  try { px = onSolidBackground(pixelsOf(bmp))[0]; } finally { bmp.close?.(); }
+  let px, scale;
+  try { px = onSolidBackground(pixelsOf(bmp))[0]; scale = px.width / bmp.width; } finally { bmp.close?.(); }
   const { width, height, data } = px, gray = new Uint8Array(width * height);
   for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = (data[j] * 77 + data[j + 1] * 150 + data[j + 2] * 29) >> 8;
-  return { gray, width, height };
+  return { gray, width, height, scale };
 }
 
 // Resolves to [{ id, box }]: box is the code's four corners as shares of the photo's width and height.
-async function ownCodesFarAway(file, ids) {
-  const { gray, width, height } = await grayOf(file);
+// misses: codes the normal reader found but couldn't read (garmentIdsInPhoto's seen.misses), checked first.
+async function ownCodesFarAway(file, ids, misses = []) {
+  const { gray, width, height, scale } = await grayOf(file);
+  const hints = misses.map(pts => pts.map(({ x, y }) => [x * scale, y * scale]));
   farWorker ??= new Worker("/g/far-finder.js");
   const found = await new Promise((resolve, reject) => {
     farStop = reject;
     farWorker.onmessage = e => { farStop = null; e.data.error ? reject(new Error(e.data.error)) : resolve(e.data.found); };
     farWorker.onerror = e => { e.preventDefault(); stopFarFinder(); reject(new Error(e.message || "The second look stopped")); };
-    farWorker.postMessage({ gray, width, height, ids }, [gray.buffer]);
+    farWorker.postMessage({ gray, width, height, ids, hints }, [gray.buffer]);
   });
   return found.map(f => ({ id: f.id, box: f.corners.map(([x, y]) => [x / width, y / height]) }));
 }
@@ -727,7 +732,7 @@ function confirmFarFinds(maybe) {
     });
     let picked = [];
     const d = sheet(h("h2", null, `Maybe yours: ${maybe.length} more ${maybe.length === 1 ? "photo" : "photos"}`), h("div", { class: "stack" },
-      h("p", { class: "small" }, `Your garment's code was too far away to read for sure in ${maybe.length === 1 ? "this one" : "these"}, but it looks like yours. It's in the ring. Untick any that don't show your garment.`),
+      h("p", { class: "small" }, `Your garment's code was too small or blurry to read for sure in ${maybe.length === 1 ? "this one" : "these"}, but it looks like yours. It's in the ring. Untick any that don't show your garment.`),
       h("div", { class: "picks" }, items.map(i => i.el)),
       h("button", { class: "btn primary block", onclick: () => { picked = items.filter(i => i.box.checked).map(i => i.m); d.close(); } }, "Add the ticked photos"),
       h("button", { class: "btn block", onclick: () => d.close() }, "Skip them")));
@@ -768,7 +773,8 @@ async function findPhotos(targets) {
   for (const file of files) {
     if (cancelled) break;
     let ids = [];
-    try { ids = await garmentIdsInPhoto(file); } catch {}
+    const seen = {};
+    try { ids = await garmentIdsInPhoto(file, seen); } catch {}
     const mine = ids.filter(x => x in targets);
     if (mine.length) {
       const r = await upload(mine, file);
@@ -779,7 +785,7 @@ async function findPhotos(targets) {
       // The second look runs while the next photo is read; one photo at a time.
       await farJob;
       if (cancelled) break;
-      farJob = ownCodesFarAway(file, Object.keys(targets))
+      farJob = ownCodesFarAway(file, Object.keys(targets), seen.misses)
         .then(async found => {
           if (found.length) maybe.push({ file, found, view: await closeUp(file, found[0].box).catch(() => null) });
           else if (ids.length) other++;

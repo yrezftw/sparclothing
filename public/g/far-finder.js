@@ -1,7 +1,9 @@
 // spår gallery: finds the owner's own garment codes in a photo when they are too small or blurry to
 // read the normal way (a Web Worker, started by app.js). It knows what each of the owner's codes looks
 // like, so instead of reading the squares it checks whether they match one of those codes:
-//   1. spots that could be a code's corner mark (box sums, at sizes from 1.3 to 3.2 pixels per square)
+//   0. first, codes the normal reader found but couldn't read (the page sends their corners)
+//   1. spots that could be a code's corner mark (box sums, 1.3 to 3.2 pixels per square, in the photo
+//      and in copies of it shrunk 2, 4 and 8 times, so big blurry codes are looked at too)
 //   2. a closer look at each spot: its middle, turn and how much it looks like a corner mark
 //   3. groups of three marks placed like a code's, with a light margin around them
 //   4. for the best few groups: the code's exact outline, then its squares compared with each of the
@@ -416,20 +418,36 @@ function refine(g, w, h, corners, n, pts, pol, m) {
   }
   return { corners: c, H, score: best };
 }
+// How much each module d squares away adds to a module centre's value on blurGrid's fine grid,
+// blurred by s modules: the same numbers as blurring the fine grid, but per module, so much faster.
+const moduleKernels = new Map();
+function moduleKernel(s) {
+  const key = Math.round(s * 20); if (moduleKernels.has(key)) return moduleKernels.get(key);
+  const sg = Math.max(0.05, s) * SUB, R = Math.ceil(3 * sg), k = []; let ks = 0;
+  for (let d = -R; d <= R; d++) { const v = Math.exp(-d * d / (2 * sg * sg)); k.push(v); ks += v; }
+  const D = Math.ceil((R + SUB) / SUB), W = new Float64Array(2 * D + 1), x0 = SUB / 2 - 1; // the centre lies between fine cells x0 and x0 + 1
+  for (let i = -D * SUB; i < (D + 1) * SUB; i++) {
+    let wt = 0; for (const x of [x0, x0 + 1]) { const t = i - x; if (t >= -R && t <= R) wt += 0.5 * k[t + R] / ks; }
+    W[Math.floor(i / SUB) + D] += wt;
+  }
+  const out = { D, W }; moduleKernels.set(key, out); return out;
+}
 // expected darkness at every module centre of a code, blurred by s modules (logo hole unknown)
 const expCache = new Map();
 function expected(id, mat, n, s) {
   const key = id + ':' + Math.round(s * 20); if (expCache.has(key)) return expCache.get(key);
-  const K = kinds(n), B = blurGrid(n, (r, c) => (K[r * n + c] === 3 ? 0 : mat[r * n + c]), s), e = new Float32Array(n * n);
-  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) e[r * n + c] = gridAt(B, c + 0.5, r + 0.5);
+  const K = kinds(n), { D, W } = moduleKernel(s), M = n + 2 * D, val = (r, c) => (r < 0 || c < 0 || r >= n || c >= n ? -1 : K[r * n + c] === 3 ? 0 : mat[r * n + c]);
+  const rows = new Float64Array(M * n), e = new Float32Array(n * n); // rows: blurred along each row, for rows -D .. n+D-1
+  for (let r = -D; r < n + D; r++) for (let c = 0; c < n; c++) { let v = 0; for (let d = -D; d <= D; d++) v += W[d + D] * val(r, c + d); rows[(r + D) * n + c] = v; }
+  for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) { let v = 0; for (let d = -D; d <= D; d++) v += W[d + D] * rows[(r + d + D) * n + c]; e[r * n + c] = v; }
   expCache.set(key, e); return e;
 }
-function readModules(g, w, h, H, n, pol, transpose) {
+function readModules(g, w, h, H, n, pol) {
   const v = new Float32Array(n * n);
   for (let r = 0; r < n; r++) for (let c = 0; c < n; c++) {
     let s = 0;
     for (const [du, dv] of [[0.35, 0.35], [0.65, 0.35], [0.35, 0.65], [0.65, 0.65]]) { const [x, y] = apply(H, c + du, r + dv); s += bil(g, w, h, x, y); }
-    v[transpose ? c * n + r : r * n + c] = -pol * s / 4;
+    v[r * n + c] = -pol * s / 4;
   }
   return v;
 }
@@ -462,8 +480,8 @@ function telling(target, n, opts = {}) {
 // targets: [{ id, mat, sel, same, nulls }] (the owner's codes, with telling()). The part that look-alike
 // codes share is taken out first, so only what is particular to each code is compared; z says how far
 // the code's score stands above the scores of 100 wrong look-alike IDs.
-function verify(g, w, h, H, n, pol, transpose, targets, s) {
-  return verifyValues(readModules(g, w, h, H, n, pol, transpose), n, targets, s);
+function verify(g, w, h, H, n, pol, targets, s) {
+  return verifyValues(readModules(g, w, h, H, n, pol), n, targets, s);
 }
 function verifyValues(v, n, targets, s) {
   let best = null;
@@ -484,53 +502,105 @@ function verifyValues(v, n, targets, s) {
 }
 
 // The whole search on a grey photo: corner marks, groups of three, then each group's squares compared
-// with the owner's codes.
-const SCALES = [1.3, 1.56, 1.87, 2.25, 2.7, 3.24]; // pixels per square; bigger codes are read the normal way
+// with the owner's codes. Codes come in all sizes, so the search runs on the photo and on copies of it
+// shrunk 2, 4 and 8 times. Codes the normal reader found but couldn't read (opts.hints, their four
+// corners) are checked first.
+const SCALES = [1.3, 1.56, 1.87, 2.25, 2.7, 3.24]; // pixels per square looked for in the photo (marks of 1.15-3.7 px)
+const LEVELS = 4, MIN_SIDE = 150; // the photo plus up to 3 copies, while the copy's short side is at least MIN_SIDE
+// a copy only needs the codes too big for the one before it (squares above about 1.6 px in the copy)
+const COPY_SCALES = SCALES.filter(m => m > 1.8), COPY_MIN = 1.5;
 const prepared = new Map();
 function target(id) { // the code's squares plus what is needed to tell it from other codes (cached)
   if (!prepared.has(id)) { const g = garment(id), t = { id, mat: g.m, n: g.n }; Object.assign(t, telling(t, g.n)); prepared.set(id, t); }
   return prepared.get(id);
 }
+// the photo at half size (means of 2x2 pixels)
+function half({ g, w, h }) {
+  const W = w >> 1, H = h >> 1, out = new Uint8Array(W * H);
+  for (let y = 0; y < H; y++) {
+    const r0 = 2 * y * w, r1 = r0 + w;
+    for (let x = 0, i = 0; x < W; x++, i += 2) out[y * W + x] = (g[r0 + i] + g[r0 + i + 1] + g[r1 + i] + g[r1 + i + 1] + 2) >> 2;
+  }
+  return { g: out, w: W, h: H };
+}
 function knownCodes(img, ids, opts = {}) {
-  const { g, w, h } = img, T = [], t0 = Date.now(), zMin = opts.zMin ?? 5.5;
+  const zMin = opts.zMin ?? 5.5, found = [], tried = [], ms = [], stats = { spots: 0, kept: 0, groups: 0 };
   const byN = new Map(); for (const id of ids) { const t = target(id); (byN.get(t.n) || byN.set(t.n, []).get(t.n)).push(t); }
-  const sp = spots(g, w, h, integral(g, w, h), SCALES, { T: 12 }); T.push(Date.now());
-  const ex = sp.map(s => examineFast(g, w, h, s)).filter(e => e && e.r >= 0.5).sort((a, b) => b.r - a.r), kept = [];
-  for (const e of ex) if (!kept.some(k => Math.abs(k.x - e.x) < 1.2 * e.m && Math.abs(k.y - e.y) < 1.2 * e.m && k.m / e.m < 1.3 && e.m / k.m < 1.3)) kept.push(e);
-  for (const e of kept) stretch(g, w, h, e);
-  T.push(Date.now());
-  const found = [], tried = []; let groups = 0;
-  for (const [n, targets] of byN) {
-    const tr = triplets(g, w, h, kept, n, { mirrored: true }), SRC = [[0, 0], [n, 0], [n, n], [0, n]]; groups += tr.length;
-    // rank the groups by how well the parts every code shares fit at their first outline
-    for (const k of tr) {
-      const { a, ex: ux, ey: uy } = k, P = (u, v) => [a.x + (u - 3.5) * ux[0] + (v - 3.5) * uy[0], a.y + (u - 3.5) * ux[1] + (v - 3.5) * uy[1]];
-      k.corners = SRC.map(([u, v]) => P(u, v)); k.mm = Math.sqrt(Math.abs(ux[0] * uy[1] - ux[1] * uy[0]));
-      const H = homography(SRC, k.corners); k.fit = H ? fitShared(g, w, h, H, generic(targets[0].mat, n, 1.2 / k.mm), a.pol) : -1;
+  const levels = [img];
+  for (let last = img; levels.length < LEVELS && Math.min(last.w, last.h) >= 2 * MIN_SIDE;) levels.push(last = half(last));
+  const done = () => !opts.all && found.length === ids.length;
+  // fits the exact outline from rough corners in copy k, then compares the squares with the owner's codes
+  const check = (k, n, targets, corners, pol, mm, at) => {
+    const { g, w, h } = levels[k], f = 2 ** k, s = 1.2 / mm;
+    const R = refine(g, w, h, corners, n, generic(targets[0].mat, n, s), pol, mm), v = verify(g, w, h, R.H, n, pol, targets, s);
+    tried.push({ ...v, ...at, fit: R.score, level: k });
+    if (v.z >= zMin && v.r >= 0.45 && v.r - v.decoyMax >= 0.1 && v.a > 0) {
+      const box = R.corners.map(([x, y]) => [x * f, y * f]), had = found.find(q => q.id === v.id);
+      if (!had) found.push({ ...v, corners: box }); else if (v.z > had.z) Object.assign(had, v, { corners: box });
     }
-    tr.sort((p, q) => q.fit - p.fit);
-    // the same code is often outlined several times; check each place once (and once mirrored)
-    const picks = [];
-    for (const k of tr) {
-      if (k.fit <= 0) break;
-      const cx = k.corners.reduce((p, q) => p + q[0], 0) / 4, cy = k.corners.reduce((p, q) => p + q[1], 0) / 4;
-      if (picks.some(p => p.mirrored === k.mirrored && Math.hypot(p.cx - cx, p.cy - cy) < 4 * Math.max(p.mm, k.mm))) continue;
-      k.cx = cx; k.cy = cy; picks.push(k);
-      if (picks.length >= (opts.maxVerify ?? 8)) break;
-    }
-    for (const k of picks) {
-      const { a, corners, mm } = k, s = 1.2 / mm;
-      const R = refine(g, w, h, corners, n, generic(targets[0].mat, n, s), a.pol, mm);
-      const v = verify(g, w, h, R.H, n, a.pol, k.mirrored, targets, s);
-      tried.push({ ...v, x: Math.round(a.x), y: Math.round(a.y), fit: R.score });
-      if (v.z >= zMin && v.r >= 0.45 && v.r - v.decoyMax >= 0.1 && v.a > 0 && !found.some(f => f.id === v.id)) {
-        found.push({ ...v, corners: R.corners });
-        if (!opts.all && found.length === ids.length) break;
+  };
+  // 1. the reader's hints: which corner is which is not known (the code can be turned or mirrored), so
+  // for each hand the turn whose shared parts fit best is checked, in the copy where a square is 2-4 pixels
+  let t = Date.now();
+  const area = quad => Math.abs(quad.reduce((s, [x, y], i) => { const [x2, y2] = quad[(i + 1) % 4]; return s + x * y2 - x2 * y; }, 0)) / 2;
+  const mid = quad => [quad.reduce((s, p) => s + p[0], 0) / 4, quad.reduce((s, p) => s + p[1], 0) / 4], hints = [];
+  for (const quad of [...(opts.hints || [])].sort((p, q) => area(q) - area(p))) { // biggest first; the same code can come twice
+    const [x, y] = mid(quad);
+    if (hints.length < 4 && !hints.some(p => { const [px, py] = mid(p); return Math.hypot(px - x, py - y) < Math.sqrt(area(p)) / 4; })) hints.push(quad);
+  }
+  for (const quad of hints) for (const [n, targets] of byN) {
+    if (done()) break;
+    const mm0 = Math.sqrt(area(quad)) / n; if (!(mm0 > 0.8)) continue;
+    let k = 0; while (k < levels.length - 1 && mm0 / 2 ** k > 4) k++;
+    const { g, w, h } = levels[k], f = 2 ** k, mm = mm0 / f, SRC = [[0, 0], [n, 0], [n, n], [0, n]], pts = generic(targets[0].mat, n, 1.2 / mm);
+    for (const mirrored of [false, true]) {
+      let best = null;
+      for (let turn = 0; turn < 4; turn++) for (const pol of [1, -1]) {
+        const corners = [0, 1, 2, 3].map(i => quad[mirrored ? (turn + 4 - i) % 4 : (turn + i) % 4]).map(([x, y]) => [x / f, y / f]);
+        const H = homography(SRC, corners), fit = H ? fitShared(g, w, h, H, pts, pol) : -1;
+        if (!best || fit > best.fit) best = { fit, corners, pol };
       }
+      if (best.fit > 0) check(k, n, targets, best.corners, best.pol, mm, { x: Math.round(quad[0][0]), y: Math.round(quad[0][1]), hint: true });
     }
   }
-  T.push(Date.now());
-  return { found, tried, spots: sp.length, kept: kept.length, groups, ms: T.map((t, i) => t - (i ? T[i - 1] : t0)) };
+  ms.push(Date.now() - t);
+  // 2. the search, in the photo and its smaller copies
+  for (let k = 0; k < levels.length && !done(); k++) {
+    t = Date.now();
+    const { g, w, h } = levels[k], f = 2 ** k;
+    const sp = spots(g, w, h, integral(g, w, h), k ? COPY_SCALES : SCALES, { T: 12 });
+    const ex = sp.map(s => examineFast(g, w, h, s)).filter(e => e && e.r >= 0.5).sort((a, b) => b.r - a.r), kept = [];
+    for (const e of ex) if (!kept.some(q => Math.abs(q.x - e.x) < 1.2 * e.m && Math.abs(q.y - e.y) < 1.2 * e.m && q.m / e.m < 1.3 && e.m / q.m < 1.3)) kept.push(e);
+    for (const e of kept) stretch(g, w, h, e);
+    stats.spots += sp.length; stats.kept += kept.length;
+    for (const [n, targets] of byN) {
+      if (done()) break;
+      const tr = triplets(g, w, h, kept, n, { mirrored: true, mMin: k ? COPY_MIN : 1.0 }), SRC = [[0, 0], [n, 0], [n, n], [0, n]]; stats.groups += tr.length;
+      // rank the groups by how well the parts every code shares fit at their first outline
+      for (const q of tr) {
+        const { a, ex: ux, ey: uy } = q, P = (u, v) => [a.x + (u - 3.5) * ux[0] + (v - 3.5) * uy[0], a.y + (u - 3.5) * ux[1] + (v - 3.5) * uy[1]];
+        q.corners = SRC.map(([u, v]) => P(u, v)); q.mm = Math.sqrt(Math.abs(ux[0] * uy[1] - ux[1] * uy[0]));
+        const H = homography(SRC, q.corners); q.fit = H ? fitShared(g, w, h, H, generic(targets[0].mat, n, 1.2 / q.mm), a.pol) : -1;
+      }
+      tr.sort((p, q) => q.fit - p.fit);
+      // the same code is often outlined several times; check each place once (and once mirrored)
+      const picks = [];
+      for (const q of tr) {
+        if (q.fit <= 0) break;
+        const cx = q.corners.reduce((p, c) => p + c[0], 0) / 4, cy = q.corners.reduce((p, c) => p + c[1], 0) / 4;
+        if (picks.some(p => p.mirrored === q.mirrored && Math.hypot(p.cx - cx, p.cy - cy) < 4 * Math.max(p.mm, q.mm))) continue;
+        q.cx = cx; q.cy = cy; picks.push(q);
+        if (picks.length >= (opts.maxVerify ?? 8)) break;
+      }
+      // a mirrored group's outline is mirrored already, so its squares are read the same way
+      for (const q of picks) {
+        if (done()) break;
+        check(k, n, targets, q.corners, q.a.pol, q.mm, { x: Math.round(q.a.x * f), y: Math.round(q.a.y * f) });
+      }
+    }
+    ms.push(Date.now() - t);
+  }
+  return { found, tried, ...stats, ms };
 }
 function fitShared(g, w, h, H, pts, pol) {
   let k = 0, sx = 0, sxx = 0, sxy = 0;
@@ -541,7 +611,7 @@ function fitShared(g, w, h, H, pts, pol) {
 // ---- the page sends a grey photo and the owner's garment IDs ----
 self.onmessage = ({ data }) => {
   try {
-    const r = knownCodes({ g: data.gray, w: data.width, h: data.height }, data.ids);
+    const r = knownCodes({ g: data.gray, w: data.width, h: data.height }, data.ids, { hints: data.hints });
     self.postMessage({ found: r.found.map(f => ({ id: f.id, corners: f.corners, z: f.z })) });
   } catch (e) {
     self.postMessage({ error: String((e && e.message) || e) });
