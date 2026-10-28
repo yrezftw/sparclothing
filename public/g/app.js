@@ -486,17 +486,41 @@ function pixelsOf(bmp, sx = 0, sy = 0, sw = bmp.width, sh = bmp.height, maxPx = 
   return ctx.getImageData(0, 0, canvas.width, canvas.height);
 }
 
+// The QR generator's files have a see-through background, which code readers take
+// for black, so a black code on it can't be read. Pictures with see-through parts
+// are read on white (dark codes) and then on black (light codes).
+function onSolidBackground(px) {
+  const d = px.data;
+  let seeThrough = false;
+  for (let i = 3; i < d.length; i += 4) if (d[i] < 255) { seeThrough = true; break; }
+  if (!seeThrough) return [px];
+  return [255, 0].map(bg => {
+    const out = new ImageData(px.width, px.height), o = out.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3] / 255, under = bg * (1 - a);
+      o[i] = d[i] * a + under; o[i + 1] = d[i + 1] * a + under; o[i + 2] = d[i + 2] * a + under; o[i + 3] = 255;
+    }
+    return out;
+  });
+}
+
 // Returns the garment IDs whose QR codes can be read in this photo.
 async function garmentIdsInPhoto(file) {
   const zx = await loadZXing().catch(() => null);
   if (zx) {
-    if (/^image\/(jpeg|png)$/.test(file.type)) {
+    // JPEG photos are read straight from the file; others (a PNG can be see-through) via the browser.
+    if (file.type === "image/jpeg") {
       try { return uniqueIds((await zx.readBarcodes(file, ZX_OPTS)).filter(r => r.isValid).map(r => r.text)); }
       catch {} // fall through and let the browser decode it
     }
     const bmp = await toBitmap(file);
-    try { return uniqueIds((await zx.readBarcodes(pixelsOf(bmp), ZX_OPTS)).filter(r => r.isValid).map(r => r.text)); }
-    finally { bmp.close?.(); }
+    try {
+      for (const px of onSolidBackground(pixelsOf(bmp))) {
+        const ids = uniqueIds((await zx.readBarcodes(px, ZX_OPTS)).filter(r => r.isValid).map(r => r.text));
+        if (ids.length) return ids;
+      }
+      return [];
+    } finally { bmp.close?.(); }
   }
   return slowGarmentIds(file);
 }
@@ -520,9 +544,10 @@ async function slowGarmentIds(file) {
       for (let gy = 0; gy < grid; gy++) for (let gx = 0; gx < grid; gx++) {
         const sx = Math.max(0, (gx - ov) * tw), sy = Math.max(0, (gy - ov) * th);
         const sw = Math.min(W - sx, tw * (1 + 2 * ov)), sh = Math.min(H - sy, th * (1 + 2 * ov));
-        const px = pixelsOf(bmp, sx, sy, sw, sh, (tile * tile * sw * sh) / Math.max(sw, sh) ** 2);
-        const id = idFromQr(jsQR(px.data, px.width, px.height, { inversionAttempts: "attemptBoth" })?.data);
-        if (id) return [id];
+        for (const px of onSolidBackground(pixelsOf(bmp, sx, sy, sw, sh, (tile * tile * sw * sh) / Math.max(sw, sh) ** 2))) {
+          const id = idFromQr(jsQR(px.data, px.width, px.height, { inversionAttempts: "attemptBoth" })?.data);
+          if (id) return [id];
+        }
         await new Promise(r => setTimeout(r)); // let the screen update
       }
     }
