@@ -125,6 +125,11 @@ dialog.viewer .nav.next{right:0;border-radius:6px 0 0 6px}
 @media (hover:none){dialog.viewer .nav{display:none}}
 .counter{font:500 13px var(--mono)}
 
+.picks{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}
+.pick{position:relative;display:block;cursor:pointer}
+.pick img{width:100%;aspect-ratio:1;object-fit:cover;border-radius:var(--r);background:var(--garment)}
+.pick input{position:absolute;top:8px;right:8px;width:24px;height:24px;margin:0;accent-color:var(--signal)}
+.pick:has(input:not(:checked)) img{opacity:.45}
 .progress{height:4px;background:var(--line);border-radius:2px;overflow:hidden}
 .progress span{display:block;height:100%;background:var(--signal);width:0;transition:width .2s}
 

@@ -1,6 +1,7 @@
 Third-party code in the spår gallery app (public/g/)
 
 jsqr.min.js — jsQR 1.4.0, Apache License 2.0, https://github.com/cozmo/jsQR
+qrcode-lib.js — QR Code Generator for JavaScript, Copyright (c) 2009 Kazuhiko Arase, MIT License (same terms as below), https://github.com/kazuhikoarase/qrcode-generator
 zxing_reader.wasm — zxing-cpp, Apache License 2.0, https://github.com/zxing-cpp/zxing-cpp
 zxing-reader.js and zxing_reader.wasm packaging — zxing-wasm 2.2.4, MIT License:
 

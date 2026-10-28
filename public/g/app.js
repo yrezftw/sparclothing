@@ -656,6 +656,85 @@ async function slowGarmentIds(file) {
   } finally { bmp.close?.(); }
 }
 
+// ---------- your own codes, too far away to read ----------
+
+// When none of your codes can be read in a photo, a second look (far-finder.js, in the
+// background) checks for your garments only. It knows what each of your codes looks like,
+// so it can recognise one about half the size the normal reader needs. That is less
+// certain than reading the code, so you pick which of these photos to add.
+let farWorker = null, farStop = null;
+function stopFarFinder() {
+  farWorker?.terminate();
+  farWorker = null;
+  farStop?.(new Error("Stopped"));
+  farStop = null;
+}
+
+// The photo as grey levels, one byte per pixel.
+async function grayOf(file) {
+  const bmp = await toBitmap(file);
+  let px;
+  try { px = onSolidBackground(pixelsOf(bmp))[0]; } finally { bmp.close?.(); }
+  const { width, height, data } = px, gray = new Uint8Array(width * height);
+  for (let i = 0, j = 0; i < gray.length; i++, j += 4) gray[i] = (data[j] * 77 + data[j + 1] * 150 + data[j + 2] * 29) >> 8;
+  return { gray, width, height };
+}
+
+// Resolves to [{ id, box }]: box is the code's four corners as shares of the photo's width and height.
+async function ownCodesFarAway(file, ids) {
+  const { gray, width, height } = await grayOf(file);
+  farWorker ??= new Worker("/g/far-finder.js");
+  const found = await new Promise((resolve, reject) => {
+    farStop = reject;
+    farWorker.onmessage = e => { farStop = null; e.data.error ? reject(new Error(e.data.error)) : resolve(e.data.found); };
+    farWorker.onerror = e => { e.preventDefault(); stopFarFinder(); reject(new Error(e.message || "The second look stopped")); };
+    farWorker.postMessage({ gray, width, height, ids }, [gray.buffer]);
+  });
+  return found.map(f => ({ id: f.id, box: f.corners.map(([x, y]) => [x / width, y / height]) }));
+}
+
+// A square close-up around a found code, with a ring around the code, as an image URL.
+async function closeUp(file, box) {
+  const bmp = await toBitmap(file);
+  try {
+    const W = bmp.width, H = bmp.height, xs = box.map(p => p[0] * W), ys = box.map(p => p[1] * H);
+    const code = Math.max(Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+    const cx = (Math.min(...xs) + Math.max(...xs)) / 2, cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+    const size = Math.min(W, H, Math.max(code * 10, 200));
+    const sx = Math.max(0, Math.min(W - size, cx - size / 2)), sy = Math.max(0, Math.min(H - size, cy - size / 2));
+    const out = 360, k = out / size;
+    const canvas = Object.assign(document.createElement("canvas"), { width: out, height: out });
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bmp, sx, sy, size, size, 0, 0, out, out);
+    ctx.lineWidth = 3;
+    for (const [color, grow] of [["#fff", 0], ["#2a3fe0", 3]]) {
+      ctx.strokeStyle = color;
+      ctx.beginPath();
+      ctx.arc((cx - sx) * k, (cy - sy) * k, code * k * 0.85 + 6 + grow, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
+    return await new Promise(res => canvas.toBlob(b => res(URL.createObjectURL(b)), "image/jpeg", 0.85));
+  } finally { bmp.close?.(); }
+}
+
+// Shows the photos only the second look found (m.view: close-up URL); resolves to the ones you keep ticked.
+function confirmFarFinds(maybe) {
+  return new Promise(resolve => {
+    const items = maybe.map(m => {
+      const box = h("input", { type: "checkbox", checked: true, "aria-label": "Add this photo" });
+      return { m, box, el: h("label", { class: "pick" }, h("img", { src: m.view, alt: "" }), box) };
+    });
+    let picked = [];
+    const d = sheet(h("h2", null, `Maybe yours: ${maybe.length} more ${maybe.length === 1 ? "photo" : "photos"}`), h("div", { class: "stack" },
+      h("p", { class: "small" }, `Your garment's code was too far away to read for sure in ${maybe.length === 1 ? "this one" : "these"}, but it looks like yours. It's in the ring. Untick any that don't show your garment.`),
+      h("div", { class: "picks" }, items.map(i => i.el)),
+      h("button", { class: "btn primary block", onclick: () => { picked = items.filter(i => i.box.checked).map(i => i.m); d.close(); } }, "Add the ticked photos"),
+      h("button", { class: "btn block", onclick: () => d.close() }, "Skip them")));
+    d.addEventListener("close", () => { maybe.forEach(m => m.view && URL.revokeObjectURL(m.view)); resolve(picked); });
+  });
+}
+
 // targets: { garmentId: name } for garments this phone owns
 async function findPhotos(targets) {
   const files = await pickPhotos();
@@ -663,17 +742,27 @@ async function findPhotos(targets) {
   let cancelled = false;
   const bar = h("span");
   const line = h("p", { class: "small" });
+  const stop = () => { cancelled = true; stopFarFinder(); };
   const d = sheet(h("h2", null, "Looking for your garments"), h("div", { class: "stack" },
     h("div", { class: "progress" }, bar), line,
-    h("button", { class: "btn block", onclick: () => { cancelled = true; } }, "Stop")));
-  d.addEventListener("cancel", e => { e.preventDefault(); cancelled = true; });
+    h("button", { class: "btn block", onclick: stop }, "Stop")));
+  d.addEventListener("cancel", e => { e.preventDefault(); stop(); });
 
   // counted per photo: one photo can show two of your garments and go to both galleries
-  const added = {}, failed = [];
-  let checked = 0, matched = 0, fresh = 0, already = 0, other = 0;
+  const added = {}, failed = [], maybe = [];
+  let checked = 0, matched = 0, fresh = 0, already = 0, other = 0, farJob = Promise.resolve();
   const update = () => {
-    line.textContent = `Checked ${checked} of ${files.length} photos · found ${matched}`;
+    line.textContent = `Checked ${checked} of ${files.length} photos · found ${matched + maybe.length}`;
     bar.style.width = `${(checked / files.length) * 100}%`;
+  };
+  const upload = async (ids, file) => {
+    let isNew = false, broke = false;
+    for (const id of ids) {
+      const r = await uploadPhotos(id, [file]);
+      if (r.done) { added[id] = (added[id] || 0) + 1; isNew = true; }
+      if (r.failed) { failed.push(r.lastError); broke = true; }
+    }
+    return isNew ? "new" : broke ? "failed" : "already";
   };
   update();
   for (const file of files) {
@@ -681,21 +770,42 @@ async function findPhotos(targets) {
     let ids = [];
     try { ids = await garmentIdsInPhoto(file); } catch {}
     const mine = ids.filter(x => x in targets);
-    let isNew = false, broke = false;
-    for (const id of mine) {
-      const r = await uploadPhotos(id, [file]);
-      if (r.done) { added[id] = (added[id] || 0) + 1; isNew = true; }
-      if (r.failed) { failed.push(r.lastError); broke = true; }
+    if (mine.length) {
+      const r = await upload(mine, file);
+      matched++;
+      if (r === "new") fresh++; else if (r === "already") already++;
+      checked++;
+    } else {
+      // The second look runs while the next photo is read; one photo at a time.
+      await farJob;
+      if (cancelled) break;
+      farJob = ownCodesFarAway(file, Object.keys(targets))
+        .then(async found => {
+          if (found.length) maybe.push({ file, found, view: await closeUp(file, found[0].box).catch(() => null) });
+          else if (ids.length) other++;
+        })
+        .catch(() => { if (ids.length) other++; })
+        .finally(() => { checked++; update(); });
     }
-    if (mine.length) { matched++; if (isNew) fresh++; else if (!broke) already++; }
-    else if (ids.length) other++;
-    checked++;
     update();
   }
+  await farJob;
+  stopFarFinder();
   d.close();
 
+  let unticked = 0;
+  if (maybe.length) {
+    const keep = await confirmFarFinds(maybe);
+    unticked = maybe.length - keep.length;
+    for (const m of keep) {
+      const r = await upload(m.found.map(f => f.id), m.file);
+      matched++;
+      if (r === "new") fresh++; else if (r === "already") already++;
+    }
+  }
+
   const total = fresh;
-  const none = checked - matched - other;
+  const none = checked - matched - other - unticked;
   const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
   const s = sheet(h("h2", null, total > 0 ? `Added ${plural(total, "photo", "photos")}` : "No new photos found"), h("div", { class: "stack" },
     Object.entries(added).map(([id, n]) => h("p", null, h("b", null, `${n}`), ` to ${targets[id]}`)),
