@@ -19,7 +19,9 @@ importScripts("/g/qrcode-lib.js"); // the QR generator's own code maker, to know
 const ALPHA = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 // how garment codes are made: the QR generator's settings, and the largest logo hole it makes
 // marks: the logo under the code with the garment's own white marks (the generator's "Middle + under, unique
-// logo"): gap is how many modules below the code the logo starts; null to leave the marks out.
+// logo" and "big unique logo"): gap is how many modules below the code the logo starts, widths how wide it can
+// be as a share of the code's width (centred under the code; MARKS.widths if not given); null to leave the
+// marks out.
 let FORMAT = { base: 'https://sparclothing.se/g/', ecl: 'H', mode: 'Byte', logo: 0.38, marks: { gap: 4 } };
 function matrix(text) {
   const qr = qrcode(0, FORMAT.ecl); qr.addData(text, FORMAT.mode); qr.make();
@@ -49,7 +51,9 @@ function kinds(n) {
 }
 // The garment's own marks in the logo under the code. This block is copied word for word from the QR
 // generator (spar-qr-generator.html) and must stay the same there and here.
-var MARKS = { cols: 33, rows: 24, count: 12 };
+// widths: how wide the logo under the code is, as a share of the code's width: the generator's "unique logo"
+// (the smallest whose marks the app's photo search can still read) and its "big unique logo"
+var MARKS = { cols: 33, rows: 24, count: 12, widths: [2 / 3, 1] };
 var MARK_AREA = [
   '.................................',
   '...............###...............',
@@ -118,14 +122,18 @@ function markCells(id) { // the squares (row * cols + column) cut out of the log
   }
   return out.sort(function (a, b) { return a - b; });
 }
+// The widths the logo under the code can have (shares of the code's width); none if marks are left out.
+const markWidths = () => (FORMAT.marks ? FORMAT.marks.widths || MARKS.widths : []);
 // Where the marks can be, in modules with the code's top-left corner at 0,0 (rows go down): every square a
 // mark may use (the same for every garment), and whether this garment's marks cut it out (white).
-function markParts(id, n) {
+// width: the logo's width as a share of the code's (the first of markWidths() if not given).
+function markParts(id, n, width) {
   if (!FORMAT.marks) return null;
-  const size = n / MARKS.cols, y0 = n + FORMAT.marks.gap, white = new Set(markCells(id)), cells = [];
+  const W = n * (width || markWidths()[0]), size = W / MARKS.cols, x0 = (n - W) / 2, y0 = n + FORMAT.marks.gap;
+  const white = new Set(markCells(id)), cells = [];
   for (let y = 0; y < MARKS.rows; y++) for (let x = 0; x < MARKS.cols; x++)
-    if (MARK_AREA[y].charAt(x) === '#') cells.push({ u: x * size, v: y0 + y * size, white: white.has(y * MARKS.cols + x) });
-  return { cells, size };
+    if (MARK_AREA[y].charAt(x) === '#') cells.push({ u: x0 + x * size, v: y0 + y * size, white: white.has(y * MARKS.cols + x) });
+  return { cells, size, x0, y0, width: W };
 }
 // Which codeword (index in the final sequence) and bit each module carries; -1 for fixed parts and spare bits.
 function placement(n) {
@@ -595,24 +603,27 @@ function markKernel(parts, s) {
     } }
   markKernels.set(key, K); return K;
 }
-// expected darkness of each mark square of a garment's logo, blurred by s modules: dark, less its white marks
+// expected darkness of each mark square of a garment's logo (width: its share of the code's width), blurred
+// by s modules: dark, less its white marks
 const markCache = new Map();
-function expectedMarks(id, n, s) {
-  const key = id + ':' + n + ':' + Math.round(s * 20); if (markCache.has(key)) return markCache.get(key);
-  const p = markParts(id, n), N = p.cells.length, K = markKernel(p, s), c = new Float32Array(N);
+function expectedMarks(id, n, s, width) {
+  const key = id + ':' + n + ':' + width + ':' + Math.round(s * 20); if (markCache.has(key)) return markCache.get(key);
+  const p = markParts(id, n, width), N = p.cells.length, K = markKernel(p, s), c = new Float32Array(N);
   p.cells.forEach((q, j) => { if (q.white) for (let i = 0; i < N; i++) c[i] += K[j * N + i]; });
   const e = new Float32Array(N); for (let i = 0; i < N; i++) e[i] = 1 - 2 * c[i];
   markCache.set(key, e); return e;
 }
 // targets: [{ id, mat, sel, same, nulls }] (the owner's codes, with telling()). The part that look-alike
 // codes share is taken out first, so only what is particular to each code is compared; z says how far
-// the code's score stands above the scores of 100 wrong look-alike IDs. With `tv` (readMarks), each code
-// is also scored with the marks in the logo under it (best.withMarks); codes printed without them keep best.
+// the code's score stands above the scores of 100 wrong look-alike IDs. With `marks` ([{ width, tv }]: the
+// logo under the code read at each width it can be printed at, readMarks), each code is also scored with
+// those marks, at the width that fits best (best.withMarks); codes printed without them keep best.
 function verify(g, w, h, H, n, pol, targets, s) {
-  const parts = markParts(targets[0].id, n), tv = parts ? readMarks(g, w, h, H, pol, parts) : null;
-  return verifyValues(readModules(g, w, h, H, n, pol), n, targets, s, tv);
+  const marks = [];
+  for (const width of markWidths()) { const tv = readMarks(g, w, h, H, pol, markParts(targets[0].id, n, width)); if (tv) marks.push({ width, tv }); }
+  return verifyValues(readModules(g, w, h, H, n, pol), n, targets, s, marks);
 }
-function verifyValues(v, n, targets, s, tv) {
+function verifyValues(v, n, targets, s, marks = []) {
   let best = null, bestT = null;
   for (const t of targets) {
     const sel = t.sel, M = new Float32Array(n * n);
@@ -625,18 +636,19 @@ function verifyValues(v, n, targets, s, tv) {
     const r = score(t.id, t.mat), rd = t.nulls.map(d => score(d.id, d.mat));
     const res = stats(t.id, r, rd); res.n = sel.length; res.a = a;
     if (!best || res.z > best.z) best = res;
-    if (!tv) continue;
-    // the marks in the logo under the code on their own: less what look-alike codes' marks share
-    const T = tv.length, Mt = new Float32Array(T);
-    for (const d of t.same) { const e = expectedMarks(d.id, n, s); for (let i = 0; i < T; i++) Mt[i] += e[i] / t.same.length; }
-    const all = [...Array(T).keys()];
-    const scoreT = id => { const et = expectedMarks(id, n, s), d = new Float32Array(T); for (let i = 0; i < T; i++) d[i] = et[i] - Mt[i]; return corrOn(tv, d, all); };
-    const rt = scoreT(t.id), rdt = t.nulls.map(d => scoreT(d.id)), resT = stats(t.id, rt, rdt);
-    // both together: each one's distance above the wrong IDs, added (and compared with the wrong IDs' sums)
-    const zq = q => (q - res.mean) / Math.max(res.sd, 0.02), zt = q => (q - resT.mean) / Math.max(resT.sd, 0.02);
-    const both = stats(t.id, zq(r) + zt(rt), rd.map((q, i) => zq(q) + zt(rdt[i])));
-    resT.both = both.z; resT.bothGap = (both.r - both.decoyMax) / Math.max(both.sd, 1e-9); resT.a = a;
-    if (!bestT || resT.both > bestT.both) bestT = resT;
+    for (const { width, tv } of marks) {
+      // the marks in the logo under the code on their own: less what look-alike codes' marks share
+      const T = tv.length, Mt = new Float32Array(T);
+      for (const d of t.same) { const e = expectedMarks(d.id, n, s, width); for (let i = 0; i < T; i++) Mt[i] += e[i] / t.same.length; }
+      const all = [...Array(T).keys()];
+      const scoreT = id => { const et = expectedMarks(id, n, s, width), d = new Float32Array(T); for (let i = 0; i < T; i++) d[i] = et[i] - Mt[i]; return corrOn(tv, d, all); };
+      const rt = scoreT(t.id), rdt = t.nulls.map(d => scoreT(d.id)), resT = stats(t.id, rt, rdt);
+      // both together: each one's distance above the wrong IDs, added (and compared with the wrong IDs' sums)
+      const zq = q => (q - res.mean) / Math.max(res.sd, 0.02), zt = q => (q - resT.mean) / Math.max(resT.sd, 0.02);
+      const both = stats(t.id, zq(r) + zt(rt), rd.map((q, i) => zq(q) + zt(rdt[i])));
+      resT.both = both.z; resT.bothGap = (both.r - both.decoyMax) / Math.max(both.sd, 1e-9); resT.a = a; resT.width = width;
+      if (!bestT || resT.both > bestT.both) bestT = resT;
+    }
   }
   if (bestT) best.withMarks = bestT;
   return best;
@@ -684,7 +696,7 @@ function knownCodes(img, ids, opts = {}) {
     const pass = q => q && q.z >= zMin && q.r >= 0.45 && q.r - q.decoyMax >= 0.1 && q.a > 0, lm = v0.withMarks;
     const passMarks = q => q && q.both >= zMin && q.bothGap >= 1 && q.r >= 0.3 && q.a > 0;
     const v = passMarks(lm) && (!pass(v0) || lm.both > v0.z) ? { ...lm, z: lm.both, marks: true } : v0;
-    tried.push({ ...v, ...at, fit: R.score, level: k, zPlain: v0.z, idPlain: v0.id, plainPass: pass(v0), zMarks: lm ? lm.z : null, rMarks: lm ? lm.r : null, zBoth: lm ? lm.both : null, gapBoth: lm ? lm.bothGap : null, idMarks: lm ? lm.id : null });
+    tried.push({ ...v, ...at, fit: R.score, level: k, zPlain: v0.z, idPlain: v0.id, plainPass: pass(v0), zMarks: lm ? lm.z : null, rMarks: lm ? lm.r : null, zBoth: lm ? lm.both : null, gapBoth: lm ? lm.bothGap : null, idMarks: lm ? lm.id : null, wMarks: lm ? lm.width : null });
     if (v.marks || pass(v)) {
       const box = R.corners.map(([x, y]) => [x * f, y * f]), had = found.find(q => q.id === v.id);
       if (!had) found.push({ ...v, corners: box }); else if (v.z > had.z) Object.assign(had, v, { corners: box });
