@@ -8,8 +8,9 @@
 //   3. groups of three marks placed like a code's, with a light margin around them
 //   4. for the best few groups: the code's exact outline, then its squares compared with each of the
 //      owner's codes and with 100 wrong codes that look alike; a match must stand far above all of them.
-//      Codes printed with the garment's own line under them (the QR generator's "Middle + under,
-//      unique line") are also compared with the line, which helps with blurry and far-away ones
+//      Codes printed with the garment's own marks in the logo under them (the QR generator's
+//      "Middle + under, unique logo") are also compared with the marks, which helps with blurry and
+//      far-away ones
 // Built by tools/far-finder/build-far.py in the project's gallery folder, where its tests are.
 "use strict";
 importScripts("/g/qrcode-lib.js"); // the QR generator's own code maker, to know each code's squares
@@ -17,9 +18,9 @@ importScripts("/g/qrcode-lib.js"); // the QR generator's own code maker, to know
 // Module patterns of garment codes, made exactly like the QR generator makes them.
 const ALPHA = '23456789ABCDEFGHJKMNPQRSTUVWXYZ';
 // how garment codes are made: the QR generator's settings, and the largest logo hole it makes
-// trace: the garment's own line under the code (the generator's "Middle + under, unique line" logo; sizes
-// in modules), null if none. Must match TRACE in the QR generator.
-let FORMAT = { base: 'https://sparclothing.se/g/', ecl: 'H', mode: 'Byte', logo: 0.38, trace: { gap: 4, cell: 1.5, cols: 22, levels: 4, riser: 0.4 } };
+// marks: the logo under the code with the garment's own white marks (the generator's "Middle + under, unique
+// logo"): gap is how many modules below the code the logo starts; null to leave the marks out.
+let FORMAT = { base: 'https://sparclothing.se/g/', ecl: 'H', mode: 'Byte', logo: 0.38, marks: { gap: 4 } };
 function matrix(text) {
   const qr = qrcode(0, FORMAT.ecl); qr.addData(text, FORMAT.mode); qr.make();
   const n = qr.getModuleCount(), m = new Int8Array(n * n);
@@ -46,30 +47,85 @@ function kinds(n) {
   }
   return k;
 }
-// The garment's own line under the code: one square per column at one of `levels` heights, worked out
-// from the garment ID, joined by thin upright lines. Must match the QR generator's traceRows() exactly.
-function mix(h) { // murmur3's finaliser: every bit of h changes about half the bits of the result
+// The garment's own marks in the logo under the code. This block is copied word for word from the QR
+// generator (spar-qr-generator.html) and must stay the same there and here.
+var MARKS = { cols: 33, rows: 24, count: 12 };
+var MARK_AREA = [
+  '.................................',
+  '...............###...............',
+  '.............#######.............',
+  '............##.....#.............',
+  '...........##....................',
+  '...........##....................',
+  '......##..###.........#####......',
+  '....####..###........########....',
+  '...##......##.......##......##...',
+  '..##.......##................##..',
+  '..##........###..............##..',
+  '.##..........#####............##.',
+  '.##............#####..........##.',
+  '.##...............###.........##.',
+  '..#................##........##..',
+  '..##........#.......##.......##..',
+  '...##......##.......##......##...',
+  '....#######.........##...####....',
+  '.....#####..........##...##......',
+  '...................##............',
+  '.............#....##.............',
+  '.............######..............',
+  '...............##................',
+  '.................................'
+];
+var MARK_SHAPES = [ // 3 or 4 squares each: upright and flat bars, T and L shapes and their turns
+  [[0, 0], [0, 1], [0, 2]], [[0, 0], [1, 0], [2, 0]],
+  [[0, 0], [0, 1], [0, 2], [1, 1]], [[1, 0], [1, 1], [1, 2], [0, 1]], [[0, 0], [1, 0], [2, 0], [1, 1]], [[1, 0], [0, 1], [1, 1], [2, 1]],
+  [[0, 0], [0, 1], [0, 2], [1, 2]], [[1, 0], [1, 1], [1, 2], [0, 2]], [[0, 0], [1, 0], [0, 1], [0, 2]], [[0, 0], [1, 0], [1, 1], [1, 2]],
+  [[0, 0], [0, 1], [1, 1], [2, 1]], [[2, 0], [0, 1], [1, 1], [2, 1]], [[0, 0], [1, 0], [2, 0], [0, 1]], [[0, 0], [1, 0], [2, 0], [2, 1]]
+];
+var MARK_PLACES = (function () { // every place a mark fits, as its squares (row * cols + column)
+  var out = [], C = MARKS.cols, R = MARKS.rows, x, y, k;
+  for (y = 0; y < R; y++) for (x = 0; x < C; x++) for (k = 0; k < MARK_SHAPES.length; k++) {
+    var cells = [], fits = true;
+    MARK_SHAPES[k].forEach(function (q) {
+      var cx = x + q[0], cy = y + q[1];
+      if (cx >= C || cy >= R || MARK_AREA[cy].charAt(cx) !== '#') fits = false; else cells.push(cy * C + cx);
+    });
+    if (fits) out.push(cells);
+  }
+  return out;
+})();
+function mix32(h) { // murmur3's finaliser
   h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16;
   return h >>> 0;
 }
-function traceRows(id, cols, levels) {
-  let h = 0x811c9dc5; const out = [];
-  for (let i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193) >>> 0; // FNV-1a
-  h = mix(h);
-  for (let i = 0; i < cols; i++) out.push(mix((h + Math.imul(i + 1, 0x9e3779b9)) >>> 0) % levels);
-  return out;
+function markCells(id) { // the squares (row * cols + column) cut out of the logo under this garment's code
+  var C = MARKS.cols, R = MARKS.rows, h = 0x811c9dc5, used = new Uint8Array(C * R), order = [], out = [], i, k = 0;
+  for (i = 0; i < id.length; i++) h = Math.imul(h ^ id.charCodeAt(i), 0x01000193) >>> 0; // FNV-1a
+  h = mix32(h);
+  for (i = 0; i < MARK_PLACES.length; i++) order.push([mix32((h + Math.imul(i + 1, 0x9e3779b9)) >>> 0), i]);
+  order.sort(function (a, b) { return a[0] - b[0] || a[1] - b[1]; });
+  for (i = 0; i < order.length && k < MARKS.count; i++) {
+    var place = MARK_PLACES[order[i][1]];
+    if (place.some(function (c) { return used[c]; })) continue; // touches a mark already there
+    place.forEach(function (c) {
+      out.push(c);
+      var x = c % C, y = (c - x) / C, dx, dy;
+      for (dy = -1; dy <= 1; dy++) for (dx = -1; dx <= 1; dx++) {
+        if (x + dx >= 0 && y + dy >= 0 && x + dx < C && y + dy < R) used[(y + dy) * C + x + dx] = 1;
+      }
+    });
+    k++;
+  }
+  return out.sort(function (a, b) { return a - b; });
 }
-// The line's place and parts, in modules with the code's top-left corner at 0,0 (rows go down): every
-// square's place (dark or not), and where two columns' squares are at different heights, an upright line
-// on the column edge from the top of the higher square to the bottom of the lower one. The upright lines
-// are listed in pieces (column edge, height, left or right half) without the ones on a dark square.
-function traceParts(id, n) {
-  const T = FORMAT.trace; if (!T) return null;
-  const rows = traceRows(id, T.cols, T.levels), x0 = (n - T.cols * T.cell) / 2, y0 = n + T.gap, cells = [], pieces = [];
-  for (let c = 0; c < T.cols; c++) for (let r = 0; r < T.levels; r++) cells.push({ u: x0 + c * T.cell, v: y0 + r * T.cell, dark: rows[c] === r });
-  for (let c = 1; c < T.cols; c++) if (rows[c] !== rows[c - 1])
-    for (let r = Math.min(rows[c], rows[c - 1]); r <= Math.max(rows[c], rows[c - 1]); r++) for (const side of [0, 1]) if (rows[c - 1 + side] !== r) pieces.push(((c - 1) * T.levels + r) * 2 + side);
-  return { cells, pieces, size: T.cell, rows, T, x0, y0 };
+// Where the marks can be, in modules with the code's top-left corner at 0,0 (rows go down): every square a
+// mark may use (the same for every garment), and whether this garment's marks cut it out (white).
+function markParts(id, n) {
+  if (!FORMAT.marks) return null;
+  const size = n / MARKS.cols, y0 = n + FORMAT.marks.gap, white = new Set(markCells(id)), cells = [];
+  for (let y = 0; y < MARKS.rows; y++) for (let x = 0; x < MARKS.cols; x++)
+    if (MARK_AREA[y].charAt(x) === '#') cells.push({ u: x * size, v: y0 + y * size, white: white.has(y * MARKS.cols + x) });
+  return { cells, size };
 }
 // Which codeword (index in the final sequence) and bit each module carries; -1 for fixed parts and spare bits.
 function placement(n) {
@@ -507,14 +563,14 @@ function telling(target, n, opts = {}) {
   // the average is taken over 60 of them; 100 others are the wrong IDs the score is compared with
   return { sel, same: same.slice(0, 60), nulls: same.slice(60, 160) };
 }
-// The garment's own line under the code (codes.traceParts): each square's darkness, read at 9 points in it.
-const TP = [0.25, 0.5, 0.75];
-function readTrace(g, w, h, H, pol, parts) {
+const TP = [0.25, 0.5, 0.75]; // where in a mark square it is read
+// the logo's mark squares in the photo (codes.markParts), 9 points each; null if they are outside the photo
+function readMarks(g, w, h, H, pol, parts) {
   const { cells, size } = parts, v = new Float32Array(cells.length);
   for (let i = 0; i < cells.length; i++) {
     let s = 0, k = 0;
     for (const a of TP) for (const b of TP) { const [x, y] = apply(H, cells[i].u + a * size, cells[i].v + b * size), val = bil(g, w, h, x, y); if (!Number.isNaN(val)) { s += val; k++; } }
-    if (!k) return null; // the line's place is outside the photo
+    if (!k) return null;
     v[i] = -pol * s / k;
   }
   return v;
@@ -523,37 +579,37 @@ function erf(x) { // Abramowitz and Stegun 7.1.26
   const t = 1 / (1 + 0.3275911 * Math.abs(x)), y = 1 - ((((1.061405429 * t - 1.453152027) * t + 1.421413741) * t - 0.284496736) * t + 0.254829592) * t * Math.exp(-x * x);
   return x >= 0 ? y : -y;
 }
-// How much each possible dark part adds to each square's 9 points when blurred by s modules; the same for
-// every garment, so worked out once per blur. Parts: the squares, then the upright lines' pieces
-// (codes.traceParts), so nothing counts twice.
-const traceKernels = new Map();
-function traceKernel(parts, s) {
-  const { cells, size, T, x0, y0 } = parts, key = cells.length + ':' + size + ':' + T.riser + ':' + Math.round(s * 20);
-  if (traceKernels.has(key)) return traceKernels.get(key);
-  const sg = Math.max(0.05, Math.round(s * 20) / 20) * Math.SQRT2, N = cells.length, rects = cells.map(c => [c.u, c.v, size, size]), q = T.riser / 2;
-  for (let c = 1; c < T.cols; c++) for (let r = 0; r < T.levels; r++) for (const side of [0, 1]) rects.push([x0 + c * size - q + side * q, y0 + r * size, q, size]);
-  const cover = (a0, len, x) => 0.5 * (erf((a0 + len - x) / sg) - erf((a0 - x) / sg)), K = new Float32Array(rects.length * N);
-  for (let j = 0; j < rects.length; j++) { const [ru, rv, rw, rh] = rects[j];
-    for (let i = 0; i < N; i++) { let t = 0; for (const a of TP) for (const b of TP) t += cover(ru, rw, cells[i].u + a * size) * cover(rv, rh, cells[i].v + b * size); K[j * N + i] = t / 9; } }
-  traceKernels.set(key, K); return K;
+// How much a white mark square adds to each mark square's 9 points when blurred by s modules; the same for
+// every garment, so worked out once per blur.
+const markKernels = new Map();
+function markKernel(parts, s) {
+  const { cells, size } = parts, key = cells.length + ':' + size + ':' + Math.round(s * 20);
+  if (markKernels.has(key)) return markKernels.get(key);
+  const sg = Math.max(0.05, Math.round(s * 20) / 20) * Math.SQRT2, N = cells.length, reach = 4 * sg + 2 * size;
+  const cover = (a0, len, x) => 0.5 * (erf((a0 + len - x) / sg) - erf((a0 - x) / sg)), K = new Float32Array(N * N);
+  for (let j = 0; j < N; j++) { const { u, v } = cells[j];
+    for (let i = 0; i < N; i++) {
+      if (Math.abs(cells[i].u - u) > reach || Math.abs(cells[i].v - v) > reach) continue;
+      let t = 0; for (const a of TP) for (const b of TP) t += cover(u, size, cells[i].u + a * size) * cover(v, size, cells[i].v + b * size);
+      K[j * N + i] = t / 9;
+    } }
+  markKernels.set(key, K); return K;
 }
-// expected darkness of each square of a garment's line, blurred by s modules
-const traceCache = new Map();
-function expectedTrace(id, n, s) {
-  const key = id + ':' + Math.round(s * 20); if (traceCache.has(key)) return traceCache.get(key);
-  const p = traceParts(id, n), N = p.cells.length, K = traceKernel(p, s), c = new Float32Array(N);
-  const add = j => { for (let i = 0; i < N; i++) c[i] += K[j * N + i]; };
-  p.cells.forEach((q, j) => { if (q.dark) add(j); });
-  for (const j of p.pieces) add(N + j);
-  const e = new Float32Array(N); for (let i = 0; i < N; i++) e[i] = 2 * c[i] - 1;
-  traceCache.set(key, e); return e;
+// expected darkness of each mark square of a garment's logo, blurred by s modules: dark, less its white marks
+const markCache = new Map();
+function expectedMarks(id, n, s) {
+  const key = id + ':' + n + ':' + Math.round(s * 20); if (markCache.has(key)) return markCache.get(key);
+  const p = markParts(id, n), N = p.cells.length, K = markKernel(p, s), c = new Float32Array(N);
+  p.cells.forEach((q, j) => { if (q.white) for (let i = 0; i < N; i++) c[i] += K[j * N + i]; });
+  const e = new Float32Array(N); for (let i = 0; i < N; i++) e[i] = 1 - 2 * c[i];
+  markCache.set(key, e); return e;
 }
 // targets: [{ id, mat, sel, same, nulls }] (the owner's codes, with telling()). The part that look-alike
 // codes share is taken out first, so only what is particular to each code is compared; z says how far
-// the code's score stands above the scores of 100 wrong look-alike IDs. With `tv` (readTrace), each code
-// is also scored with its own line under it (best.withTrace); codes printed without one keep best.
+// the code's score stands above the scores of 100 wrong look-alike IDs. With `tv` (readMarks), each code
+// is also scored with the marks in the logo under it (best.withMarks); codes printed without them keep best.
 function verify(g, w, h, H, n, pol, targets, s) {
-  const parts = traceParts(targets[0].id, n), tv = parts ? readTrace(g, w, h, H, pol, parts) : null;
+  const parts = markParts(targets[0].id, n), tv = parts ? readMarks(g, w, h, H, pol, parts) : null;
   return verifyValues(readModules(g, w, h, H, n, pol), n, targets, s, tv);
 }
 function verifyValues(v, n, targets, s, tv) {
@@ -570,11 +626,11 @@ function verifyValues(v, n, targets, s, tv) {
     const res = stats(t.id, r, rd); res.n = sel.length; res.a = a;
     if (!best || res.z > best.z) best = res;
     if (!tv) continue;
-    // the line under the code on its own: its squares, less what look-alike codes' lines share
+    // the marks in the logo under the code on their own: less what look-alike codes' marks share
     const T = tv.length, Mt = new Float32Array(T);
-    for (const d of t.same) { const e = expectedTrace(d.id, n, s); for (let i = 0; i < T; i++) Mt[i] += e[i] / t.same.length; }
+    for (const d of t.same) { const e = expectedMarks(d.id, n, s); for (let i = 0; i < T; i++) Mt[i] += e[i] / t.same.length; }
     const all = [...Array(T).keys()];
-    const scoreT = id => { const et = expectedTrace(id, n, s), d = new Float32Array(T); for (let i = 0; i < T; i++) d[i] = et[i] - Mt[i]; return corrOn(tv, d, all); };
+    const scoreT = id => { const et = expectedMarks(id, n, s), d = new Float32Array(T); for (let i = 0; i < T; i++) d[i] = et[i] - Mt[i]; return corrOn(tv, d, all); };
     const rt = scoreT(t.id), rdt = t.nulls.map(d => scoreT(d.id)), resT = stats(t.id, rt, rdt);
     // both together: each one's distance above the wrong IDs, added (and compared with the wrong IDs' sums)
     const zq = q => (q - res.mean) / Math.max(res.sd, 0.02), zt = q => (q - resT.mean) / Math.max(resT.sd, 0.02);
@@ -582,7 +638,7 @@ function verifyValues(v, n, targets, s, tv) {
     resT.both = both.z; resT.bothGap = (both.r - both.decoyMax) / Math.max(both.sd, 1e-9); resT.a = a;
     if (!bestT || resT.both > bestT.both) bestT = resT;
   }
-  if (bestT) best.withTrace = bestT;
+  if (bestT) best.withMarks = bestT;
   return best;
 }
 function stats(id, r, rd) {
@@ -591,7 +647,7 @@ function stats(id, r, rd) {
 }
 
 // The whole search on a grey photo: corner marks, groups of three, then each group's squares (and the
-// garment's own line under the code, if it has one) compared with the owner's codes. Codes come in all
+// garment's own marks in the logo under the code, if it has them) compared with the owner's codes. Codes come in all
 // sizes, so the search runs on the photo and on copies of it shrunk 2, 4 and 8 times. Codes the normal
 // reader found but couldn't read (opts.hints, their four corners) are checked first.
 const SCALES = [1.3, 1.56, 1.87, 2.25, 2.7, 3.24]; // pixels per square looked for in the photo (marks of 1.15-3.7 px)
@@ -622,14 +678,14 @@ function knownCodes(img, ids, opts = {}) {
   const check = (k, n, targets, corners, pol, mm, at) => {
     const { g, w, h } = levels[k], f = 2 ** k, s = 1.2 / mm;
     const R = refine(g, w, h, corners, n, generic(targets[0].mat, n, s), pol, mm), v0 = verify(g, w, h, R.H, n, pol, targets, s);
-    // Codes with the garment's own line under them are also scored with the line. That counts when the code
-    // and line together stand 5.5 above the wrong IDs, at least 1 above the best of them, and the line on
-    // its own matches (r 0.3); codes printed without a line keep the code's own score.
-    const pass = q => q && q.z >= zMin && q.r >= 0.45 && q.r - q.decoyMax >= 0.1 && q.a > 0, lt = v0.withTrace;
-    const passLine = q => q && q.both >= zMin && q.bothGap >= 1 && q.r >= 0.3 && q.a > 0;
-    const v = passLine(lt) && (!pass(v0) || lt.both > v0.z) ? { ...lt, z: lt.both, line: true } : v0;
-    tried.push({ ...v, ...at, fit: R.score, level: k, zPlain: v0.z, idPlain: v0.id, plainPass: pass(v0), zLine: lt ? lt.z : null, rLine: lt ? lt.r : null, zBoth: lt ? lt.both : null, gapBoth: lt ? lt.bothGap : null, idLine: lt ? lt.id : null });
-    if (v.line || pass(v)) {
+    // Codes with the garment's own marks in the logo under them are also scored with the marks. That counts
+    // when the code and marks together stand 5.5 above the wrong IDs, at least 1 above the best of them, and
+    // the marks on their own match (r 0.3); codes printed without the marks keep the code's own score.
+    const pass = q => q && q.z >= zMin && q.r >= 0.45 && q.r - q.decoyMax >= 0.1 && q.a > 0, lm = v0.withMarks;
+    const passMarks = q => q && q.both >= zMin && q.bothGap >= 1 && q.r >= 0.3 && q.a > 0;
+    const v = passMarks(lm) && (!pass(v0) || lm.both > v0.z) ? { ...lm, z: lm.both, marks: true } : v0;
+    tried.push({ ...v, ...at, fit: R.score, level: k, zPlain: v0.z, idPlain: v0.id, plainPass: pass(v0), zMarks: lm ? lm.z : null, rMarks: lm ? lm.r : null, zBoth: lm ? lm.both : null, gapBoth: lm ? lm.bothGap : null, idMarks: lm ? lm.id : null });
+    if (v.marks || pass(v)) {
       const box = R.corners.map(([x, y]) => [x * f, y * f]), had = found.find(q => q.id === v.id);
       if (!had) found.push({ ...v, corners: box }); else if (v.z > had.z) Object.assign(had, v, { corners: box });
     }
